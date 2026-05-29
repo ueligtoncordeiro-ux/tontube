@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TonTube — Download YouTube HD</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ── NAVBAR ── -->
+  <nav class="navbar">
+    <a href="/" class="logo">
+      <div class="logo-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <path d="M9 18V5l12-2v13" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="6" cy="18" r="3" stroke="white" stroke-width="2"/>
+          <circle cx="18" cy="16" r="3" stroke="white" stroke-width="2"/>
+        </svg>
+      </div>
+      <span class="logo-text">TonTube</span>
+    </a>
+    <div class="nav-right">
+      <span class="nav-badge">
+        <span class="badge-dot"></span>
+        Gratuito
+      </span>
+    </div>
+  </nav>
+
+  <!-- ── MAIN ── -->
+  <main>
+
+    <!-- STEP 1 · HERO / INPUT -->
+    <section id="hero-section" class="hero fade-in">
+      <div class="hero-tag">
+        <span class="tag-dot"></span>
+        YouTube · Instagram · TikTok · SoundCloud
+      </div>
+
+      <h1 class="hero-title">Baixe qualquer vídeo<br/><span class="gradient-text">em segundos.</span></h1>
+      <p class="hero-subtitle">Sem cadastro. Sem anúncios. Até 4K HD e MP3 320kbps.</p>
+
+      <!-- Error card (shown inside hero) -->
+      <div id="error-card" class="error-card hidden">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span id="error-message">Erro desconhecido</span>
+      </div>
+
+      <div class="input-box">
+        <div class="input-wrapper">
+          <svg class="input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
+          </svg>
+          <input
+            type="text"
+            id="url-input"
+            class="url-input"
+            placeholder="Cole o link do YouTube aqui..."
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button id="paste-btn" class="paste-btn" title="Colar da área de transferência">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+            </svg>
+          </button>
+        </div>
+        <button id="analyze-btn" class="analyze-btn">
+          Analisar
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="features-bar">
+        <div class="feat"><span>🎬</span> MP4 até 4K</div>
+        <div class="feat-sep"></div>
+        <div class="feat"><span>🎵</span> MP3 320kbps</div>
+        <div class="feat-sep"></div>
+        <div class="feat"><span>⚡</span> Ultra rápido</div>
+        <div class="feat-sep"></div>
+        <div class="feat"><span>🔒</span> Sem cadastro</div>
+      </div>
+    </section>
+
+    <!-- STEP 2 · LOADING -->
+    <section id="loading-section" class="loading-section hidden">
+      <div class="loader-ring">
+        <div class="ring-inner"></div>
+      </div>
+      <p class="loading-title">Analisando vídeo<span class="dots"></span></p>
+      <p class="loading-sub">Buscando formatos disponíveis...</p>
+    </section>
+
+    <!-- STEP 3 · RESULT -->
+    <section id="result-section" class="result-section hidden" style="width:100%">
+      <button id="back-btn" class="back-btn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+        Voltar
+      </button>
+
+      <div class="video-card">
+        <div class="thumb-wrap">
+          <img id="video-thumb" src="" alt="" />
+          <span class="thumb-duration" id="video-duration"></span>
+        </div>
+        <div class="video-info">
+          <p class="video-channel" id="video-channel"></p>
+          <h2 class="video-title" id="video-title"></h2>
+          <div class="video-stats" id="video-stats"></div>
+        </div>
+      </div>
+
+      <div class="section-label">Escolha o formato</div>
+      <div class="formats-grid" id="formats-grid"></div>
+
+      <button id="download-btn" class="download-btn" disabled>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Baixar Agora
+      </button>
+    </section>
+
+    <!-- STEP 4 · DOWNLOADING -->
+    <section id="progress-section" class="progress-section hidden" style="width:100%">
+      <div class="progress-header">
+        <div class="progress-icon">
+          <div class="ring-sm"></div>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+        </div>
+        <div>
+          <p class="prog-title">Baixando arquivo...</p>
+          <p class="prog-sub" id="progress-speed">Calculando velocidade...</p>
+        </div>
+        <div class="prog-pct-badge" id="progress-pct-badge">0%</div>
+      </div>
+
+      <div class="progress-track">
+        <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+      </div>
+
+      <div class="progress-steps">
+        <span id="step-dl" class="pstep active">Download</span>
+        <span class="pstep-arrow">›</span>
+        <span id="step-proc" class="pstep">Processando</span>
+        <span class="pstep-arrow">›</span>
+        <span id="step-done" class="pstep">Pronto</span>
+      </div>
+    </section>
+
+    <!-- STEP 5 · DONE -->
+    <section id="done-section" class="done-section hidden" style="width:100%">
+      <div class="done-glow"></div>
+      <div class="done-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+      </div>
+      <h2 class="done-title">Pronto! 🎉</h2>
+      <p class="done-sub">Arquivo processado e pronto para download.</p>
+
+      <div class="done-actions">
+        <button id="save-btn" class="btn-save">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Salvar Arquivo
+        </button>
+        <button id="new-btn" class="btn-new">
+          Novo Download
+        </button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ── FOOTER ── -->
+  <footer class="footer">
+    <span>TonTube &copy; 2026</span>
+    <span class="footer-sep">·</span>
+    <span>Powered by yt-dlp + FFmpeg</span>
+    <span class="footer-sep">·</span>
+    <span>Uso pessoal</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
