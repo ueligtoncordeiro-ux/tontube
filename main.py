@@ -46,16 +46,35 @@ def cleanup_old_files():
             pass
 
 
+PLAYER_CLIENTS = [
+    ["android_vr"],
+    ["android"],
+    ["android", "web"],
+]
+
+
+def _extract_info(url: str):
+    last_err = None
+    for clients in PLAYER_CLIENTS:
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extractor_args": {"youtube": {"player_client": clients}},
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(url, download=False)
+        except Exception as e:
+            last_err = e
+    raise last_err
+
+
 @app.post("/api/analyze")
 async def analyze(req: AnalyzeRequest):
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "extractor_args": {"youtube": {"player_client": ["android_vr"]}},
-    }
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(req.url, download=False)
+        info = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _extract_info(req.url)
+        )
 
         available_heights = set()
         for f in info.get("formats", []):
@@ -160,7 +179,7 @@ async def download(
             "no_warnings": True,
             "progress_hooks": [hook],
             "outtmpl": output_template,
-            "extractor_args": {"youtube": {"player_client": ["android"]}},
+            "extractor_args": {"youtube": {"player_client": ["android", "android_vr"]}},
             **({"ffmpeg_location": FFMPEG_PATH} if FFMPEG_PATH else {}),
         }
 
