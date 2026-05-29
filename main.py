@@ -217,4 +217,9 @@ async def get_file(file_id: str):
     return FileResponse(f, filename=f.name, media_type="application/octet-stream")
 
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
