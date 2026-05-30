@@ -32,8 +32,8 @@ def _find_ffmpeg() -> Optional[str]:
 
 FFMPEG_PATH = _find_ffmpeg()
 
-# Clients tentados em paralelo — retorna o primeiro que responder
-PLAYER_CLIENTS = [["android_vr"], ["android"], ["android", "web"]]
+# Clients tentados em paralelo — tv_embedded e ios contornam bloqueios de IP cloud
+PLAYER_CLIENTS = [["tv_embedded"], ["ios"], ["web_creator"], ["android"], ["android_vr"]]
 
 
 class AnalyzeRequest(BaseModel):
@@ -208,7 +208,7 @@ async def download(
             "progress_hooks": [hook],
             "outtmpl": output_template,
             "socket_timeout": 30,
-            "extractor_args": {"youtube": {"player_client": ["android", "android_vr"]}},
+            "extractor_args": {"youtube": {"player_client": ["tv_embedded", "ios", "web_creator"]}},
             **({"ffmpeg_location": FFMPEG_PATH} if FFMPEG_PATH else {}),
         }
 
