@@ -10,6 +10,8 @@ import json
 import threading
 import uuid
 import time
+import os
+import tempfile
 from pathlib import Path
 
 app = FastAPI(title="TonTube")
@@ -32,7 +34,36 @@ def _find_ffmpeg() -> Optional[str]:
 
 FFMPEG_PATH = _find_ffmpeg()
 
-# Clients tentados em paralelo — tv_embedded e ios contornam bloqueios de IP cloud
+# ── COOKIES ────────────────────────────────────────────────────────────────────
+# Se a variável YOUTUBE_COOKIES estiver definida no ambiente (Render env vars),
+# salva o conteúdo num arquivo temporário e usa em todas as chamadas ao yt-dlp.
+# Isso permite baixar de IPs de cloud que o YouTube bloqueia sem cookies.
+COOKIES_FILE: Optional[str] = None
+
+def _setup_cookies() -> Optional[str]:
+    content = os.environ.get("YOUTUBE_COOKIES", "").strip()
+    if not content:
+        return None
+    try:
+        tf = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+        tf.write(content)
+        tf.close()
+        print(f"[TonTube] YouTube cookies carregados ({len(content)} chars) → {tf.name}")
+        return tf.name
+    except Exception as e:
+        print(f"[TonTube] Erro ao salvar cookies: {e}")
+        return None
+
+COOKIES_FILE = _setup_cookies()
+
+def _cookie_opts() -> dict:
+    """Retorna opções de cookie se disponíveis."""
+    return {"cookiefile": COOKIES_FILE} if COOKIES_FILE else {}
+
+
+# ── PLAYER CLIENTS ─────────────────────────────────────────────────────────────
+# tv_embedded e ios contornam bloqueios de IP cloud do YouTube.
+# Com cookies configurados, qualquer client funciona.
 PLAYER_CLIENTS = [["tv_embedded"], ["ios"], ["web_creator"], ["android"], ["android_vr"]]
 
 
@@ -57,6 +88,7 @@ def _try_extract(url: str, clients: list) -> dict:
         "no_warnings": True,
         "socket_timeout": 12,
         "extractor_args": {"youtube": {"player_client": clients}},
+        **_cookie_opts(),
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         return ydl.extract_info(url, download=False)
@@ -82,7 +114,7 @@ async def _extract_parallel(url: str) -> dict:
 
     try:
         for _ in range(len(PLAYER_CLIENTS)):
-            status, value = await asyncio.wait_for(queue.get(), timeout=18.0)
+            status, value = await asyncio.wait_for(queue.get(), timeout=20.0)
             if status == "ok":
                 return value
             errors.append(value)
@@ -91,6 +123,8 @@ async def _extract_parallel(url: str) -> dict:
             t.cancel()
 
     last = errors[-1] if errors else Exception("Todos os clients falharam")
+    # Log do erro real para debug nos logs do Render
+    print(f"[TonTube] Analyze falhou para {url}: {last}")
     raise last
 
 
@@ -102,8 +136,12 @@ async def analyze(req: AnalyzeRequest):
         msg = str(e).lower()
         if "private" in msg or "unavailable" in msg or "removed" in msg:
             raise HTTPException(400, "Vídeo privado ou indisponível.")
-        if "sign in" in msg or "login" in msg:
-            raise HTTPException(400, "Este vídeo requer login no YouTube.")
+        if "sign in" in msg or "login" in msg or "confirm your age" in msg:
+            if not COOKIES_FILE:
+                raise HTTPException(400, "YouTube bloqueou este servidor. Configure YOUTUBE_COOKIES no painel do Render.")
+            raise HTTPException(400, "Vídeo requer login. Verifique se os cookies ainda são válidos.")
+        if "429" in msg or "too many" in msg:
+            raise HTTPException(429, "YouTube bloqueou temporariamente. Aguarde alguns minutos.")
         raise HTTPException(400, "Não foi possível analisar. Verifique o link e tente novamente.")
 
     available_heights = set()
@@ -112,7 +150,6 @@ async def analyze(req: AnalyzeRequest):
         if h and f.get("vcodec", "none") not in ("none", None) and f.get("url"):
             available_heights.add(h)
 
-    # Se nenhum formato com URL, mostra todas as resoluções padrão mesmo assim
     if not available_heights:
         available_heights = {360, 480, 720, 1080}
 
@@ -210,6 +247,7 @@ async def download(
             "socket_timeout": 30,
             "extractor_args": {"youtube": {"player_client": ["tv_embedded", "ios", "web_creator"]}},
             **({"ffmpeg_location": FFMPEG_PATH} if FFMPEG_PATH else {}),
+            **_cookie_opts(),
         }
 
         if media_type == "audio":
@@ -230,6 +268,7 @@ async def download(
                     ydl.download([url])
             except Exception as e:
                 error_holder[0] = str(e)
+                print(f"[TonTube] Download falhou: {e}")
             finally:
                 done_event.set()
 
@@ -240,8 +279,15 @@ async def download(
             await asyncio.sleep(0.5)
 
         if error_holder[0]:
-            err = error_holder[0]
-            msg = "Formato indisponível. Tente qualidade menor." if "requested format" in err.lower() else "Falha no download. Tente novamente."
+            err = error_holder[0].lower()
+            if "requested format" in err:
+                msg = "Formato indisponível. Tente qualidade menor."
+            elif "sign in" in err or "login" in err:
+                msg = "YouTube bloqueou o download. Configure os cookies no servidor."
+            elif "429" in err or "too many" in err:
+                msg = "Rate limit do YouTube. Aguarde alguns minutos e tente novamente."
+            else:
+                msg = "Falha no download. Tente novamente."
             yield f"data: {json.dumps({'error': msg})}\n\n"
             return
 
@@ -269,7 +315,11 @@ async def get_file(file_id: str):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "ffmpeg": bool(FFMPEG_PATH)}
+    return {
+        "status": "ok",
+        "ffmpeg": bool(FFMPEG_PATH),
+        "cookies": bool(COOKIES_FILE),
+    }
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
