@@ -18,7 +18,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 DOWNLOADS_DIR = Path("downloads")
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
-# Resolve ffmpeg: prefer system PATH, fallback to imageio-ffmpeg bundle
+
 def _find_ffmpeg() -> Optional[str]:
     import shutil
     if path := shutil.which("ffmpeg"):
@@ -29,7 +29,11 @@ def _find_ffmpeg() -> Optional[str]:
     except ImportError:
         return None
 
+
 FFMPEG_PATH = _find_ffmpeg()
+
+# Clients tentados em paralelo — retorna o primeiro que responder
+PLAYER_CLIENTS = [["android_vr"], ["android"], ["android", "web"]]
 
 
 class AnalyzeRequest(BaseModel):
@@ -46,105 +50,127 @@ def cleanup_old_files():
             pass
 
 
-PLAYER_CLIENTS = [
-    ["android_vr"],
-    ["android"],
-    ["android", "web"],
-]
+def _try_extract(url: str, clients: list) -> dict:
+    """Executa em thread separada — tenta um client específico."""
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "socket_timeout": 12,
+        "extractor_args": {"youtube": {"player_client": clients}},
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=False)
 
 
-def _extract_info(url: str):
-    last_err = None
-    for clients in PLAYER_CLIENTS:
-        opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "extractor_args": {"youtube": {"player_client": clients}},
-        }
+async def _extract_parallel(url: str) -> dict:
+    """Dispara todos os clients em paralelo e retorna o primeiro que funcionar."""
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def worker(clients):
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                return ydl.extract_info(url, download=False)
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, _try_extract, url, clients),
+                timeout=15.0,
+            )
+            await queue.put(("ok", result))
         except Exception as e:
-            last_err = e
-    raise last_err
+            await queue.put(("err", e))
+
+    tasks = [asyncio.create_task(worker(c)) for c in PLAYER_CLIENTS]
+    errors = []
+
+    try:
+        for _ in range(len(PLAYER_CLIENTS)):
+            status, value = await asyncio.wait_for(queue.get(), timeout=18.0)
+            if status == "ok":
+                return value
+            errors.append(value)
+    finally:
+        for t in tasks:
+            t.cancel()
+
+    last = errors[-1] if errors else Exception("Todos os clients falharam")
+    raise last
 
 
 @app.post("/api/analyze")
 async def analyze(req: AnalyzeRequest):
     try:
-        info = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: _extract_info(req.url)
-        )
-
-        available_heights = set()
-        for f in info.get("formats", []):
-            h = f.get("height")
-            vcodec = f.get("vcodec", "none")
-            if h and vcodec not in ("none", None) and f.get("url"):
-                available_heights.add(h)
-
-        formats = []
-        height_meta = {
-            2160: ("4K Ultra HD", None),
-            1440: ("2K QHD", None),
-            1080: ("1080p Full HD", "HD"),
-            720: ("720p HD", "HD"),
-            480: ("480p", None),
-            360: ("360p", None),
-        }
-        for height, (label, badge) in height_meta.items():
-            if any(ah >= height for ah in available_heights):
-                formats.append({
-                    "id": f"video_{height}",
-                    "label": label,
-                    "type": "video",
-                    "ext": "mp4",
-                    "format_string": f"bestvideo[height<={height}]+bestaudio/best[height<={height}]",
-                    "badge": badge,
-                    "popular": height == 1080,
-                })
-
-        formats += [
-            {
-                "id": "audio_mp3",
-                "label": "MP3",
-                "sublabel": "320 kbps",
-                "type": "audio",
-                "ext": "mp3",
-                "format_string": "bestaudio/best",
-                "badge": "Pop",
-                "popular": False,
-            },
-            {
-                "id": "audio_m4a",
-                "label": "M4A",
-                "sublabel": "Alta qualidade",
-                "type": "audio",
-                "ext": "m4a",
-                "format_string": "bestaudio/best",
-                "badge": None,
-                "popular": False,
-            },
-        ]
-
-        duration = info.get("duration", 0) or 0
-        duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else ""
-
-        return {
-            "title": info.get("title", "Vídeo"),
-            "thumbnail": info.get("thumbnail", ""),
-            "duration": duration_str,
-            "channel": info.get("uploader", ""),
-            "view_count": info.get("view_count", 0),
-            "formats": formats,
-        }
-    except HTTPException:
-        raise
+        info = await _extract_parallel(req.url)
     except Exception as e:
-        msg = str(e)
-        if "unavailable" in msg.lower() or "private" in msg.lower():
-            raise HTTPException(400, "Vídeo indisponível ou privado.")
-        raise HTTPException(400, "Não foi possível analisar este vídeo. Verifique o link.")
+        msg = str(e).lower()
+        if "private" in msg or "unavailable" in msg or "removed" in msg:
+            raise HTTPException(400, "Vídeo privado ou indisponível.")
+        if "sign in" in msg or "login" in msg:
+            raise HTTPException(400, "Este vídeo requer login no YouTube.")
+        raise HTTPException(400, "Não foi possível analisar. Verifique o link e tente novamente.")
+
+    available_heights = set()
+    for f in info.get("formats", []):
+        h = f.get("height")
+        if h and f.get("vcodec", "none") not in ("none", None) and f.get("url"):
+            available_heights.add(h)
+
+    # Se nenhum formato com URL, mostra todas as resoluções padrão mesmo assim
+    if not available_heights:
+        available_heights = {360, 480, 720, 1080}
+
+    formats = []
+    height_meta = {
+        2160: ("4K Ultra HD", None),
+        1440: ("2K QHD", None),
+        1080: ("1080p Full HD", "HD"),
+        720: ("720p HD", "HD"),
+        480: ("480p", None),
+        360: ("360p", None),
+    }
+    for height, (label, badge) in height_meta.items():
+        if any(ah >= height for ah in available_heights):
+            formats.append({
+                "id": f"video_{height}",
+                "label": label,
+                "type": "video",
+                "ext": "mp4",
+                "format_string": f"bestvideo[height<={height}]+bestaudio/best[height<={height}]",
+                "badge": badge,
+                "popular": height == 1080,
+            })
+
+    formats += [
+        {
+            "id": "audio_mp3",
+            "label": "MP3",
+            "sublabel": "320 kbps",
+            "type": "audio",
+            "ext": "mp3",
+            "format_string": "bestaudio/best",
+            "badge": "Pop",
+            "popular": False,
+        },
+        {
+            "id": "audio_m4a",
+            "label": "M4A",
+            "sublabel": "Alta qualidade",
+            "type": "audio",
+            "ext": "m4a",
+            "format_string": "bestaudio/best",
+            "badge": None,
+            "popular": False,
+        },
+    ]
+
+    duration = info.get("duration", 0) or 0
+    duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else ""
+
+    return {
+        "title": info.get("title", "Vídeo"),
+        "thumbnail": info.get("thumbnail", ""),
+        "duration": duration_str,
+        "channel": info.get("uploader", ""),
+        "view_count": info.get("view_count", 0),
+        "formats": formats,
+    }
 
 
 @app.get("/api/download")
@@ -159,7 +185,7 @@ async def download(
     output_template = str(DOWNLOADS_DIR / f"{job_id}.%(ext)s")
 
     async def stream():
-        state = {"pct": 0, "speed": 0}
+        state = {"pct": 0, "speed": 0, "phase": "baixando"}
         done_event = threading.Event()
         error_holder: list = [None]
 
@@ -168,17 +194,20 @@ async def download(
                 total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
                 dl = d.get("downloaded_bytes", 0)
                 if total > 0:
-                    state["pct"] = min(int(dl / total * 88), 88)
+                    state["pct"] = min(int(dl / total * 85), 85)
                 if d.get("speed"):
                     state["speed"] = d["speed"]
+                state["phase"] = "baixando"
             elif d["status"] == "finished":
-                state["pct"] = 95
+                state["pct"] = 90
+                state["phase"] = "convertendo"
 
         opts: dict = {
             "quiet": True,
             "no_warnings": True,
             "progress_hooks": [hook],
             "outtmpl": output_template,
+            "socket_timeout": 30,
             "extractor_args": {"youtube": {"player_client": ["android", "android_vr"]}},
             **({"ffmpeg_location": FFMPEG_PATH} if FFMPEG_PATH else {}),
         }
@@ -207,11 +236,13 @@ async def download(
         threading.Thread(target=run, daemon=True).start()
 
         while not done_event.is_set():
-            yield f"data: {json.dumps({'progress': state['pct'], 'speed': state['speed']})}\n\n"
+            yield f"data: {json.dumps({'progress': state['pct'], 'speed': state['speed'], 'phase': state['phase']})}\n\n"
             await asyncio.sleep(0.5)
 
         if error_holder[0]:
-            yield f"data: {json.dumps({'error': 'Falha no download. Tente outro formato.'})}\n\n"
+            err = error_holder[0]
+            msg = "Formato indisponível. Tente qualidade menor." if "requested format" in err.lower() else "Falha no download. Tente novamente."
+            yield f"data: {json.dumps({'error': msg})}\n\n"
             return
 
         file_path = next((f for f in DOWNLOADS_DIR.iterdir() if f.stem == job_id), None)
@@ -238,7 +269,7 @@ async def get_file(file_id: str):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "ffmpeg": bool(FFMPEG_PATH)}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

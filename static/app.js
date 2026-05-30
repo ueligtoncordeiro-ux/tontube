@@ -39,6 +39,80 @@ function hideError() {
   $('error-card').classList.add('hidden');
 }
 
+// ── ANALYZE PROGRESS (fake animation) ──
+const ANALYZE_MESSAGES = [
+  'Conectando ao YouTube...',
+  'Buscando formatos disponíveis...',
+  'Verificando qualidade do vídeo...',
+  'Obtendo informações do canal...',
+  'Quase pronto...',
+];
+
+let _analyzeTimer   = null;
+let _analyzeMsgTimer = null;
+let _analyzeTarget  = 0;
+let _analyzeCurrent = 0;
+
+function startAnalyzeProgress() {
+  _analyzeCurrent = 0;
+  _analyzeTarget  = 0;
+  setAnalyzeBar(0);
+  setAnalyzeMsg(0);
+
+  // slowly advance the bar to 88% over ~10 s
+  const steps = [
+    { target: 18, delay: 400 },
+    { target: 35, delay: 1200 },
+    { target: 52, delay: 2200 },
+    { target: 68, delay: 3800 },
+    { target: 80, delay: 5800 },
+    { target: 88, delay: 8500 },
+  ];
+
+  steps.forEach(({ target, delay }) => {
+    setTimeout(() => {
+      if (_analyzeTimer !== null) setAnalyzeBar(target);
+    }, delay);
+  });
+
+  // cycle status messages
+  let msgIdx = 0;
+  _analyzeMsgTimer = setInterval(() => {
+    msgIdx = Math.min(msgIdx + 1, ANALYZE_MESSAGES.length - 1);
+    setAnalyzeMsg(msgIdx);
+  }, 2200);
+
+  _analyzeTimer = true; // flag "running"
+}
+
+function setAnalyzeBar(pct) {
+  const fill = $('analyze-bar-fill');
+  const pctEl = $('analyze-pct');
+  if (fill) fill.style.width = pct + '%';
+  if (pctEl) pctEl.textContent = pct + '%';
+}
+
+function setAnalyzeMsg(idx) {
+  const el = $('loading-status');
+  if (!el) return;
+  el.style.opacity = '0';
+  setTimeout(() => {
+    el.textContent = ANALYZE_MESSAGES[idx];
+    el.style.opacity = '1';
+  }, 150);
+}
+
+function stopAnalyzeProgress(success) {
+  _analyzeTimer = null;
+  clearInterval(_analyzeMsgTimer);
+  _analyzeMsgTimer = null;
+  if (success) {
+    setAnalyzeBar(100);
+    const el = $('analyze-pct');
+    if (el) el.textContent = '100%';
+  }
+}
+
 // ── ANALYZE ──
 async function analyze() {
   const url = $('url-input').value.trim();
@@ -47,6 +121,7 @@ async function analyze() {
   state.url = url;
   hideError();
   show('loading');
+  startAnalyzeProgress();
 
   try {
     const res = await fetch('/api/analyze', {
@@ -61,10 +136,12 @@ async function analyze() {
     }
 
     const data = await res.json();
+    stopAnalyzeProgress(true);
     state.videoInfo = data;
     renderResult(data);
     show('result');
   } catch (e) {
+    stopAnalyzeProgress(false);
     show('hero');
     showError(e.message);
   }
@@ -164,8 +241,8 @@ function startDownload() {
     }
 
     if (typeof d.progress === 'number') {
-      updateProgress(d.progress, d.speed || 0);
-      if (d.progress >= 95) setStep('proc');
+      updateProgress(d.progress, d.speed || 0, d.phase || '');
+      if (d.phase === 'convertendo' || d.progress >= 90) setStep('proc');
     }
 
     if (d.done) {
@@ -184,14 +261,16 @@ function startDownload() {
   };
 }
 
-function updateProgress(pct, speed) {
+function updateProgress(pct, speed, phase) {
   $('progress-fill').style.width = `${pct}%`;
   $('progress-pct-badge').textContent = `${pct}%`;
 
-  if (speed > 0) {
+  if (phase === 'convertendo') {
+    $('progress-speed').textContent = 'Convertendo e mesclando faixas...';
+  } else if (speed > 0) {
     const mb = (speed / 1024 / 1024).toFixed(1);
     $('progress-speed').textContent = `Velocidade: ${mb} MB/s`;
-  } else if (pct >= 95) {
+  } else if (pct >= 90) {
     $('progress-speed').textContent = 'Finalizando processamento...';
   }
 }
